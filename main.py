@@ -1,11 +1,6 @@
 """
-main.py -- Telegram-bot powered by python-telegram-bot + OpenAI API
-
-Start command: python main.py
-
-Required environment variables:
-    BOT_TOKEN       -- Telegram bot token from @BotFather
-    OPENAI_API_KEY  -- OpenAI API key
+main.py -- Telegram-bot via python-telegram-bot + OpenAI
+Required env vars: BOT_TOKEN, OPENAI_API_KEY
 """
 
 import logging
@@ -22,9 +17,7 @@ from telegram.ext import (
     filters,
 )
 
-# ---------------------------------------------------------------------------
-# Logging setup
-# ---------------------------------------------------------------------------
+# Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -32,61 +25,76 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Environment variables check
-# ---------------------------------------------------------------------------
+# Env vars check
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not BOT_TOKEN:
-    logger.critical(
-        "BOT_TOKEN environment variable is not set. "
-        "Add it in Railway -> Variables and restart the service."
-    )
+    logger.critical("BOT_TOKEN not set. Add it in Railway Variables.")
     sys.exit(1)
 
 if not OPENAI_API_KEY:
-    logger.critical(
-        "OPENAI_API_KEY environment variable is not set. "
-        "Add it in Railway -> Variables and restart the service."
-    )
+    logger.critical("OPENAI_API_KEY not set. Add it in Railway Variables.")
     sys.exit(1)
 
-# ---------------------------------------------------------------------------
-# OpenAI async client
-# ---------------------------------------------------------------------------
+# OpenAI client
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# ---------------------------------------------------------------------------
-# System prompt -- replace with your own ready prompt text
-# ---------------------------------------------------------------------------
+# System prompt
 PROMPT = """
 TUT BUDET MOY GOTOVIY PROMPT
 """
 
-# ---------------------------------------------------------------------------
+
 # Handlers
-# ---------------------------------------------------------------------------
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start command."""
     user = update.effective_user
-    logger.info("cmd_start from user %s (id=%s)", user.username, user.id)
-    await update.message.reply_text(
-        f"Hello, {user.first_name}! Send me any message and I will reply via OpenAI."
-    )
+    logger.info("Start from user %s (id=%s)", user.username, user.id)
+    await update.message.reply_text("Hello! Send me a message.")
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /help command."""
-    await update.message.reply_text(
-        "Send me any text message and I will answer using OpenAI API."
-    )
+    await update.message.reply_text("Send any text and I reply via OpenAI.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming text messages and reply via OpenAI."""
     user = update.effective_user
     user_text = update.message.text
-    logger.info(
-        "Message from %s (id=%s): %s",
+    logger.info("Message from %s (id=%s): %s", user.username, user.id, user_text[:80])
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    try:
+        response = await openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": PROMPT.strip()},
+                {"role": "user", "content": user_text},
+            ],
+            max_tokens=1000,
+            temperature=0.7,
+        )
+        answer = response.choices[0].message.content
+        logger.info("OpenAI replied (%d chars)", len(answer))
+    except Exception as exc:
+        logger.error("OpenAI error: %s", exc, exc_info=True)
+        answer = "Error calling OpenAI. Try again later."
+    max_len = 4096
+    for i in range(0, len(answer), max_len):
+        await update.message.reply_text(answer[i : i + max_len])
+
+
+# Entry point
+
+def main() -> None:
+    logger.info("Bot starting...")
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    logger.info("Polling started.")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == "__main__":
+    main()
+
